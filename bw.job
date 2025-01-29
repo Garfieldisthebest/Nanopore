@@ -1,0 +1,91 @@
+#!/bin/bash
+#SBATCH --job-name=drh_bw
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=24
+#SBATCH --gpus=1
+#SBATCH --mem=700g
+#SBATCH --time=150:00:00
+#SBATCH --output=/mnt/BioScratch/wzhao/drh_bw.txt
+
+# Directories and files
+WORKDIR="/mnt/bioadhoc/Groups/RaoLab/wzhao/DAM_DRH_Experiment_LSK_122324/new"
+CHROM_SIZES="/mnt/bioadhoc/Groups/RaoLab/wzhao/reference_genome/hg38.chrom.sizes"
+
+# Move to the work directory
+cd "${WORKDIR}"
+
+# A function to process an input file (either dam or drh)
+process_file() {
+  local prefix=$1
+  local input_file="${prefix}_aggregated_results.bed"
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Processing ${input_file} ..."
+
+  #---------------------------------------------------------------------------
+  # 1) Calculate average coverage and standard deviation
+  #---------------------------------------------------------------------------
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 1: Calculating coverage statistics for ${input_file}..."
+  read -r mean std <<< "$(
+    awk '{
+           c=$4;  # coverage
+           sum += c;
+           sumsq += c*c;
+           n++;
+         }
+         END {
+           m = sum / n; 
+           var = (sumsq - (sum^2 / n)) / (n - 1); 
+           sd = sqrt(var);
+           printf("%.6f %.6f", m, sd);
+         }
+        ' "${input_file}"
+  )"
+  echo "File: ${input_file}"
+  echo "Average coverage = $mean"
+  echo "Std of coverage  = $std"
+  echo ""
+
+  #---------------------------------------------------------------------------
+  # 2) Split by strand (+) and (-), produce bedGraph
+  #    Output columns: chrom, start, end=(start+1), score=(methylation/coverage)
+  #---------------------------------------------------------------------------
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 2: Generating bedGraph for ${prefix} (+ strand)..."
+  awk 'BEGIN{OFS="\t"}
+       {
+         if ($3 == "+") {
+           ratio=0
+           if ($4>0) ratio=$5/$4
+           print $1, $2, $2+1, ratio
+         }
+       }' "${input_file}" > "${prefix}_plus.bedGraph"
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 2: Generating bedGraph for ${prefix} (- strand)..."
+  awk 'BEGIN{OFS="\t"}
+       {
+         if ($3 == "-") {
+           ratio=0
+           if ($4>0) ratio=$5/$4
+           print $1, $2, $2+1, ratio
+         }
+       }' "${input_file}" > "${prefix}_minus.bedGraph"
+
+  #---------------------------------------------------------------------------
+  # 3) Convert each bedGraph to BigWig
+  #---------------------------------------------------------------------------
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Step 3: Converting bedGraph to BigWig for ${prefix}..."
+  bedGraphToBigWig "${prefix}_plus.bedGraph"  "${CHROM_SIZES}"  "${prefix}_positive_strand.bw"
+  bedGraphToBigWig "${prefix}_minus.bedGraph" "${CHROM_SIZES}"  "${prefix}_negative_strand.bw"
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Finished processing ${prefix}."
+  echo "------------------------------------------------------------"
+}
+
+# Process both dam and drh
+process_file "dam"
+process_file "drh"
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] All done! Generated:"
+echo " - dam_positive_strand.bw   dam_negative_strand.bw"
+echo " - drh_positive_strand.bw   drh_negative_strand.bw"
+

@@ -1,0 +1,88 @@
+#!/bin/bash
+#SBATCH --job-name=drh_agg_new
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=24
+#SBATCH --gpus=1
+#SBATCH --mem=700g
+#SBATCH --time=150:00:00
+#SBATCH --output=/mnt/BioScratch/wzhao/drh_agg_new.txt
+
+# Move to directory containing DRH BED files
+cd /mnt/bioadhoc/Groups/RaoLab/wzhao/DAM_DRH_Experiment_LSK_122324/DRH_DAM_122324/bed
+
+# Print a start timestamp
+echo "======================================"
+date +"%Y-%m-%d %T - Starting to sort and aggregate"
+echo "======================================"
+
+# 1) Concatenate all .sorted.bed files.
+# 2) Sort by chromosome (column 1), start (column 2, numeric), and strand (column 6).
+# 3) Aggregate coverage and mod in a single pass with awk.
+
+cat *.sorted.bed \
+| sort -k1,1 -k2,2n -k6,6 --parallel=24 \
+| awk '
+BEGIN {
+    FS = OFS = "\t"
+    last_chr   = ""
+    last_start = -1
+    last_strand= ""
+    sum_cov = 0
+    sum_mod = 0
+    record_count = 0
+}
+
+{
+    # coverage and mod are in columns 10 and 12
+    cov = $10 + 0
+    md  = $12 + 0
+
+    # If this is the first line processed
+    if (NR == 1) {
+        last_chr   = $1
+        last_start = $2
+        last_strand= $6
+        sum_cov    = cov
+        sum_mod    = md
+        record_count = 1
+    } else {
+        # Check if the current line has the same (chr, start, strand) as the last
+        if ($1 == last_chr && $2 == last_start && $6 == last_strand) {
+            # Same key => accumulate coverage and mod
+            sum_cov += cov
+            sum_mod += md
+        } else {
+            # New key => output the sums for the previous key
+            print last_chr, last_start, last_strand, sum_cov, sum_mod
+
+            # Reset for the new key
+            last_chr   = $1
+            last_start = $2
+            last_strand= $6
+            sum_cov    = cov
+            sum_mod    = md
+        }
+        record_count++
+
+        # Optional progress message every 10 million lines
+        if (record_count % 10000000 == 0) {
+            print "Processed", record_count, "lines so far..." > "/dev/stderr"
+        }
+    }
+}
+
+END {
+    # Print the final accumulated key
+    if (last_chr != "") {
+        print last_chr, last_start, last_strand, sum_cov, sum_mod
+    }
+}
+' \
+> /mnt/bioadhoc/Groups/RaoLab/wzhao/DAM_DRH_Experiment_LSK_122324/new/drh_aggregated_results.bed
+
+# Print an end timestamp
+echo "======================================"
+date +"%Y-%m-%d %T - Finished sorting and aggregating"
+echo "======================================"
+

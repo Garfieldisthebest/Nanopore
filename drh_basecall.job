@@ -1,0 +1,71 @@
+#!/bin/bash
+#SBATCH --job-name=drh-basecalling(drh)
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=24
+#SBATCH --gpus=4
+#SBATCH --mem=400g
+#SBATCH --time=150:00:00
+#SBATCH --output=/mnt/BioScratch/wzhao/drh_output.txt
+
+
+# Directory containing POD5 files
+POD5_DIR="/mnt/bioadhoc/Groups/RaoLab/wzhao/DAM_DRH_Experiment_LSK_122324/DRH_DAM_122324/20241223_1906_2E_PBA04900_1e4ba2a7/pod5"
+
+# Directory to store BAM files
+BAM_DIR="/mnt/bioadhoc/Groups/RaoLab/wzhao/DAM_DRH_Experiment_LSK_122324/DRH_DAM_122324/bam"
+
+# Directory to store the output BED files
+BED_DIR="/mnt/bioadhoc/Groups/RaoLab/wzhao/DAM_DRH_Experiment_LSK_122324/DRH_DAM_122324/bed"
+
+mkdir -p "$BAM_DIR"
+mkdir -p "$BED_DIR"
+
+# Loop through each POD5 file in the directory
+for pod5_file in "$POD5_DIR"/*.pod5; do
+    if [[ -f "$pod5_file" ]]; then
+        # Extract the base name of the POD5 file (without extension)
+        base_name=$(basename "$pod5_file" .pod5)
+        
+        # Define output BAM and BED file paths
+        bam_file="$BAM_DIR/${base_name}.bam"
+        bed_file="$BED_DIR/${base_name}.bed"
+
+        # Check if BED file already exists; skip processing if it does
+        if [[ -f "$bed_file" ]]; then
+            echo "BED file for $base_name already exists. Skipping processing."
+            continue
+        fi
+
+        # Run the Dorado basecaller for each POD5 file, saving directly to BAM
+        dorado basecaller \
+            /home/wzhao/package_installed/dorado_models/dna_r10.4.1_e8.2_400bps_sup@v5.0.0 "$pod5_file" \
+            --modified-bases-models /home/wzhao/package_installed/dorado_models/dna_r10.4.1_e8.2_400bps_sup@v5.0.0_6mA@v2 \
+            -v \
+            --recursive \
+            --reference /mnt/bioadhoc/Groups/RaoLab/wzhao/reference_genome/GCF_000001405.40_GRCh38.p14_genomic.fna \
+            > "$bam_file"
+
+        echo "Basecalling completed for $pod5_file, output saved to $bam_file"
+
+        # Sort and index BAM file
+        sorted_bam="${bam_file%.bam}.sorted.bam"
+        
+        samtools sort "$bam_file" -o "$sorted_bam"
+        samtools index "$sorted_bam"
+
+        # Generate BED file using Modkit with threshold for base 'a' set to 0.85
+        modkit pileup "$sorted_bam" "$bed_file" --log-filepath "$BED_DIR/${base_name}.log" --mod-threshold a:0.9
+	# Create a sorted version of the BED file
+	sorted_bed_file="${bed_file%.bed}.sorted.bed"
+	sort -k1,1 -k2,2n "$bed_file" > "$sorted_bed_file"
+
+	echo "Original BED file saved as: $bed_file"
+	echo "Sorted BED file saved as: $sorted_bed_file"
+
+
+        echo "Processed sorted BAM file: $sorted_bam, BED file generated at $bed_file"
+    else
+        echo "No POD5 files found in $POD5_DIR"
+    fi
+done
