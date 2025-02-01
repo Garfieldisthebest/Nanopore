@@ -1,7 +1,5 @@
 # Nanopore
 
-Hi Dr. Sahoo,
-
 This is the whole pipeline of Nanopore Sequencing Data that I have created.
 It includes five four coding files:
 dam_basecall.job
